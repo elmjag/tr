@@ -1,0 +1,6 @@
+name: tr
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9.7
+  - urwid=2.1.2
