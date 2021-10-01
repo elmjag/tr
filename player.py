@@ -1,8 +1,11 @@
 #!/usr/bin/env python
-from sys import argv
+from os import fork
+from sys import exit
 from pathlib import Path
+from socket import socketpair, SOCK_DGRAM
 from trace import runscript
 from utils import Tracer, Records, get_record_file
+from zhukov import encode_frame
 
 
 class Replay(Tracer):
@@ -11,11 +14,14 @@ class Replay(Tracer):
             self.return_value = return_value
 
         def __call__(self, *args):
-            print(f"patched {args=} {self.return_value=}")
+            # print(f"patched {args=} {self.return_value=}")
             return self.return_value
 
-    def __init__(self, script_file: Path, records, debug_logging=False):
+    def __init__(
+        self, script_file: Path, records: Records, ctrl_socket, debug_logging=False
+    ):
         super().__init__(script_file, records, debug_logging)
+        self._ctrl_socket = ctrl_socket
 
     def _patch_call_function(self, frame):
         code_obj = frame.f_code
@@ -34,11 +40,18 @@ class Replay(Tracer):
                 frame, opcode_arg + 1, self.FuncPatch(self.records.get_value())
             )
 
+    def _push_frame_state(self, frame):
+        self._ctrl_socket.send(encode_frame(frame))
+        self._ctrl_socket.recv(1024)
+
     def __call__(self, frame, event, arg):
         code_obj = frame.f_code
 
         if code_obj.co_filename != self.script_file:
             return None
+
+        if event == "line":
+            self._push_frame_state(frame)
 
         self._print(frame, event, arg)
 
@@ -53,8 +66,25 @@ class Replay(Tracer):
         return self
 
 
-script_file = Path(argv[1]).absolute()
-record_file = get_record_file(script_file)
+def _run_tracer(source_file: Path, ctrl_socket):
+    script_file = source_file.absolute()
+    record_file = get_record_file(script_file)
 
-with record_file.open("rb") as rec_f:
-    runscript(script_file, Replay(script_file, Records(rec_f), False))
+    with record_file.open("rb") as rec_f:
+        runscript(script_file, Replay(script_file, Records(rec_f), ctrl_socket, False))
+
+
+def start_player(source_file: Path):
+    parent, child = socketpair(type=SOCK_DGRAM)
+
+    pid = fork()
+    if pid:  # parent
+        child.close()
+        return parent
+
+    # child
+    parent.close()
+    _run_tracer(source_file, child)
+    # terminate process here,
+    # to avoid returning to caller of of start_player()
+    exit(0)

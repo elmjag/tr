@@ -31,7 +31,7 @@ class Recorder(Tracer):
             opcode = code_obj.co_code[frame.f_lasti]
             opcode_arg = code_obj.co_code[frame.f_lasti + 1]
 
-            self._print(f"--{opcode=}->", frame.f_lasti, self.opname[opcode], opcode_arg)
+            self._print(frame.f_lasti, self.opname[opcode], opcode_arg)
 
             if self.record_stack_top:
                 self._record_stack_top(frame)

@@ -13,17 +13,19 @@ from urwid import (
     MainLoop,
     ExitMainLoop,
 )
+from zhukov import decode_frame
+from player import start_player
 
 
 class Model:
     def __init__(self, source_file: Path):
-        self.source_file_name = source_file.name
+        self.source_file = source_file
         self.current_line = 1
 
         with source_file.open() as f:
             self.source_file_lines = f.readlines()
 
-        self.variables = dict(var1=1, var2="hejsan")
+        self.variables = None
 
     def goto_next_line(self):
         self.current_line += 1
@@ -48,6 +50,10 @@ class Viewer:
                 yield ("highlight", name)
                 yield f": {val}\n"
 
+        if not self.model.variables:
+            # no variables currently
+            return ["nada"]
+
         return list(_generate_markup())
 
     def _build_source_code_widget(self):
@@ -57,8 +63,8 @@ class Viewer:
         return LineBox(filler)
 
     def _build_variables_widget(self):
-        text = Text(self._markup_variables())
-        filler = Filler(text, valign="top")
+        self.variables_text_widget = Text(self._markup_variables(), wrap="ellipsis")
+        filler = Filler(self.variables_text_widget, valign="top")
         v_padding = Padding(filler, left=1, right=1)
 
         return LineBox(v_padding)
@@ -90,7 +96,7 @@ class Viewer:
     def __init__(self, model: Model):
         self.model = model
 
-        header = Text(model.source_file_name)
+        header = Text(model.source_file.name)
 
         body = Columns(
             [
@@ -103,16 +109,36 @@ class Viewer:
 
     def update(self):
         self.source_text_widget.set_text(self._markup_source_lines())
+        self.variables_text_widget.set_text(self._markup_variables())
+
+
+class ReplaySocket:
+    def __init__(self):
+        self._new_line_cb = None
+        self._socket = None
+
+    def start_reply(self, source_file: Path, main_loop: MainLoop, new_line_cb):
+        self._new_line_cb = new_line_cb
+        self._socket = start_player(source_file)
+        main_loop.watch_file(self._socket.fileno(), self)
+
+    def __call__(self):
+        response = self._socket.recv(1024 * 32)
+
+        self._new_line_cb(decode_frame(response))
+
+    def step_line(self):
+        self._socket.send(b"")
+
+    def close(self):
+        self._socket.close()
 
 
 class Controller:
     def __init__(self, model: Model, viewer: Viewer):
         self.model = model
         self.viewer = viewer
-
-    def _goto_next_line(self):
-        self.model.goto_next_line()
-        self.viewer.update()
+        self.reply_socket = ReplaySocket()
 
     def handle_input(self, input):
         if not isinstance(input, str):
@@ -122,11 +148,19 @@ class Controller:
 
         input = input.lower()
         if input in ("n", " "):
-            self._goto_next_line()
+            self.reply_socket.step_line()
             return
 
         if input in ("q", "esc"):
             raise ExitMainLoop()
+
+    def new_state(self, frame):
+        self.model.current_line = frame.lineno
+        self.model.variables = frame.locals
+        self.viewer.update()
+
+    def start_replay(self, main_loop: MainLoop):
+        self.reply_socket.start_reply(self.model.source_file, main_loop, self.new_state)
 
 
 def err_exit(error_msg):
@@ -165,6 +199,8 @@ def main():
         viewer.PALETTE,
         unhandled_input=lambda k: controller.handle_input(k),
     )
+
+    controller.start_replay(main_loop)
     main_loop.run()
 
 

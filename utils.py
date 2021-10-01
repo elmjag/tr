@@ -30,7 +30,7 @@ class Tracer:
 
     CALL_FUNCTION = dis.opmap["CALL_FUNCTION"]
 
-    def __init__(self, script_file: Path, records, debug_logging=False):
+    def __init__(self, script_file: Path, records: Records, debug_logging=False):
         self.script_file = str(script_file)
         self.records = records
 
@@ -47,14 +47,11 @@ class Tracer:
     def outside_call(self, func):
         if not isinstance(func, self.FunctionType):
             # probably builtin function or method
-            #print("build in, record it")
             return True
 
         outside_call = func.__code__.co_filename != self.script_file
-        #print("snake code record it?", outside_call)
 
         return outside_call
-
 
 
 def get_record_file(script_file: Path) -> Path:
