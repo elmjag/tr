@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from sys import argv
 from pathlib import Path
 from trace import runscript
@@ -6,26 +6,45 @@ from utils import Tracer, Records, get_record_file
 
 
 class Recorder(Tracer):
-    def __init__(self, script_file: Path, records, debug_logging=False):
-        super().__init__(script_file, records, debug_logging)
-        self.record_stack_top = False
+    class ResultIntercept:
+        def __init__(self, recoder, records: Records, func):
+            self.recorder = recoder
+            self.records = records
+            self.func = func
 
-    def _record_stack_top(self, frame):
-        self.record_stack_top = False
-        val = self.peek_stack(frame, 1)
-        self.records.write_value(val)
+        def __call__(self, *args):
+            res = self.func(*args)
+            self.records.write_value(res)
+            self.recorder.tracing_on = True
+            return res
+
+    def __init__(self, script_file: Path, records: Records, debug_logging=False):
+        super().__init__(script_file, records, debug_logging)
+        self.tracing_on = True
+        self.last_shown_frame = None
 
     def _record_result(self, frame, opcode_arg):
         func = self.peek_stack(frame, opcode_arg + 1)
         return self.outside_call(func)
 
-    def __call__(self, frame, event, arg):
-        code_obj = frame.f_code
+    def _show_frame(self, frame):
+        if self.last_shown_frame is frame:
+            # already shown
+            return
 
-        if code_obj.co_filename != self.script_file:
+        self.last_shown_frame = frame
+        self.dis.dis(frame.f_code, file=self.stderr)
+
+    def __call__(self, frame, event, arg):
+        if not self.tracing_on:
+            frame.f_trace_opcodes = True
             return None
 
-        self._print(frame, event, arg)
+        code_obj = frame.f_code
+
+        self._print(f"{frame=} {event=} {arg=}")
+        if event == "call":
+            self._show_frame(frame)
 
         if event == "opcode":
             opcode = code_obj.co_code[frame.f_lasti]
@@ -33,11 +52,23 @@ class Recorder(Tracer):
 
             self._print(frame.f_lasti, self.opname[opcode], opcode_arg)
 
-            if self.record_stack_top:
-                self._record_stack_top(frame)
+            if opcode == self.CALL_METHOD:
+                pos = opcode_arg + 2
+                f = self.peek_stack(frame, pos)
+                if f is None:
+                    pos = opcode_arg + 1
+                    f = self.peek_stack(frame, pos)
 
-            if opcode == self.CALL_FUNCTION:
-                self.record_stack_top = self._record_result(frame, opcode_arg)
+                self._print(f"call method {opcode_arg=} {f=} {type(f)=}")
+
+                if isinstance(f, self.MethodDescriptorType) or isinstance(
+                    f, self.BuiltinMethodType
+                ):
+                    self._print("BUILT IN!")
+                    self.overwrite_stack_value(
+                        frame, pos, self.ResultIntercept(self, self.records, f)
+                    )
+                    self.tracing_on = False
 
         frame.f_trace_opcodes = True
 

@@ -14,53 +14,32 @@ class Replay(Tracer):
             self.return_value = return_value
 
         def __call__(self, *args):
-            # print(f"patched {args=} {self.return_value=}")
             return self.return_value
 
     def __init__(
         self, script_file: Path, records: Records, ctrl_socket, debug_logging=False
     ):
         super().__init__(script_file, records, debug_logging)
+        self._step_mode = "line"
         self._ctrl_socket = ctrl_socket
-
-    def _patch_call_function(self, frame):
-        code_obj = frame.f_code
-        co_code = code_obj.co_code
-
-        opcode = co_code[frame.f_lasti]
-        if opcode != self.CALL_FUNCTION:
-            return
-
-        opcode_arg = code_obj.co_code[frame.f_lasti + 1]
-        func = self.peek_stack(frame, opcode_arg + 1)
-        outsider = self.outside_call(func)
-
-        if outsider:
-            self.overwrite_stack_value(
-                frame, opcode_arg + 1, self.FuncPatch(self.records.get_value())
-            )
 
     def _push_frame_state(self, frame):
         self._ctrl_socket.send(encode_frame(frame))
-        self._ctrl_socket.recv(1024)
+        self._step_mode = self._ctrl_socket.recv(1024).decode()
 
     def __call__(self, frame, event, arg):
         code_obj = frame.f_code
 
-        if code_obj.co_filename != self.script_file:
-            return None
+        self._print("------>", frame, event, arg)
 
-        if event == "line":
+        if event == self._step_mode:
             self._push_frame_state(frame)
-
-        self._print(frame, event, arg)
 
         if event == "opcode":
             opcode = code_obj.co_code[frame.f_lasti]
             opcode_arg = code_obj.co_code[frame.f_lasti + 1]
 
             self._print(frame.f_lasti, self.opname[opcode], opcode_arg)
-            self._patch_call_function(frame)
 
         frame.f_trace_opcodes = True
         return self
