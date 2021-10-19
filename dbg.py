@@ -12,11 +12,12 @@ stack  - show stack
 quit   - exit debugger
 """
 from typing import Optional, Iterable, Tuple
+import dis
 from argparse import ArgumentParser
 from pathlib import Path
 from enum import Enum
 from sys import stdin, stdout, stderr
-from itertools import count
+from itertools import count, chain
 from zhukov import decode_frame, Frame
 from player import start_player
 
@@ -192,9 +193,43 @@ def goto_next_line(reply_socket: ReplaySocket):
     return frame
 
 
+class Opcodes:
+    def __init__(self, frame: Frame):
+        self.frame = frame
+
+    def get_opcodes(self):
+        code = self.frame.code
+
+        line_regions = chain(code.lines)
+        end = -1
+        lineno = None
+
+        for i in range(0, len(code.code), 2):
+            if i >= end:
+                start, end, lineno = next(line_regions)
+                if lineno is None:
+                    lineno = "?"
+
+            opcode = code.code[i]
+            arg = code.code[i + 1]
+            op_name = dis.opname[opcode]
+
+            yield lineno, i, op_name, arg
+
+    def get_current_opcode(self):
+        for lineno, i, op_name, arg in self.get_opcodes():
+            if i == self.frame.lasti:
+                return lineno, i, op_name, arg
+
+
 def goto_next_opcode(reply_socket: ReplaySocket):
     reply_socket.step_opcode()
-    return reply_socket.get_frame()
+    frame = reply_socket.get_frame()
+
+    lineno, i, op_name, arg = Opcodes(frame).get_current_opcode()
+    print(f"{lineno:{5}} {i:{12}} {op_name:{20}} {arg:{3}}")
+
+    return frame
 
 
 def show_source(frame: Frame):
@@ -210,11 +245,45 @@ def show_source(frame: Frame):
         if lineno < start_line:
             continue
 
-        if lineno > end_line:
+        if lineno >= end_line:
             break
 
         prefix = "-->" if frame.lineno == lineno else lineno
         print(f"{prefix:{3}} {line}", end="")
+
+
+def show_opcodes(frame: Frame):
+    opcodes = Opcodes(frame)
+
+    all_opcodes = []
+    lasti_line = None
+    prev_line = None
+    for lineno, i, op_name, arg in opcodes.get_opcodes():
+        first_col = ""
+
+        if lineno != prev_line:
+            # we are at new source code line
+            first_col = lineno
+
+            if prev_line:
+                # separate each source code line block by empty line
+                # (and don't insert empty line before first block)
+                all_opcodes.append("")
+
+            prev_line = lineno
+
+        if i == frame.lasti:
+            first_col = "-->"
+            lasti_line = len(all_opcodes)
+
+        line = f"{first_col:{5}} {i:{12}} {op_name:{20}} {arg:{3}}"
+        all_opcodes.append(line)
+
+    start = max(0, lasti_line - (MAX_SOURCE_ROWS // 2))
+    end = min(len(all_opcodes), start + MAX_SOURCE_ROWS)
+
+    for line in all_opcodes[start:end]:
+        print(line)
 
 
 def run_commands(reply_socket: ReplaySocket):
@@ -237,6 +306,8 @@ def run_commands(reply_socket: ReplaySocket):
                 print_help()
             case Commands.SOURCE:
                 show_source(frame)
+            case Commands.OPCODE:
+                show_opcodes(frame)
             case Commands.NEXT:
                 frame = goto_next_line(reply_socket)
             case Commands.STEP:

@@ -13,6 +13,7 @@ class CodeObject:
 @dataclass
 class Frame:
     lineno: int  # f_lineno
+    lasti: int  # f_lasti
     locals: dict  # f_locals
     code: CodeObject  # f_code
 
@@ -41,7 +42,9 @@ def encode_frame(frame) -> bytes:
         lines=list(f_code.co_lines()),
     )
 
-    f = Frame(lineno=frame.f_lineno, locals=_get_locals(), code=code)
+    f = Frame(
+        lineno=frame.f_lineno, lasti=frame.f_lasti, locals=_get_locals(), code=code
+    )
 
     return dumps(f)
 
