@@ -171,28 +171,6 @@ class SourceFile:
         return None
 
 
-#
-# Commands implementation
-#
-
-
-def print_help():
-    for command in Commands:
-        print(f"{command.value.name:{6}} - {command.value.help_text}")
-
-
-def goto_next_line(reply_socket: ReplaySocket):
-    reply_socket.step_line()
-    frame = reply_socket.get_frame()
-
-    current_line = SourceFile(frame).get_current_line()
-    if current_line:
-        lineno, line = current_line
-        print(f"{lineno:{3}} {line}", end="")
-
-    return frame
-
-
 class Opcodes:
     def __init__(self, frame: Frame):
         self.frame = frame
@@ -222,6 +200,28 @@ class Opcodes:
                 return lineno, i, op_name, arg
 
 
+#
+# Commands implementation
+#
+
+
+def print_help():
+    for command in Commands:
+        print(f"{command.value.name:{6}} - {command.value.help_text}")
+
+
+def goto_next_line(reply_socket: ReplaySocket):
+    reply_socket.step_line()
+    frame = reply_socket.get_frame()
+
+    current_line = SourceFile(frame).get_current_line()
+    if current_line:
+        lineno, line = current_line
+        print(f"{lineno:{3}} {line}", end="")
+
+    return frame
+
+
 def goto_next_opcode(reply_socket: ReplaySocket):
     reply_socket.step_opcode()
     frame = reply_socket.get_frame()
@@ -230,6 +230,17 @@ def goto_next_opcode(reply_socket: ReplaySocket):
     print(f"{lineno:{5}} {i:{12}} {op_name:{20}} {arg:{3}}")
 
     return frame
+
+
+def show_variables(frame: Frame):
+    def _print_vars(vars_dict):
+        for name, val in vars_dict.items():
+            print(f"  {name}: {val}")
+
+    print("globals:")
+    _print_vars(frame.globals)
+    print("locals:")
+    _print_vars(frame.locals)
 
 
 def show_source(frame: Frame):
@@ -312,6 +323,8 @@ def run_commands(reply_socket: ReplaySocket):
                 frame = goto_next_line(reply_socket)
             case Commands.STEP:
                 frame = goto_next_opcode(reply_socket)
+            case Commands.VARS:
+                show_variables(frame)
             case Commands.QUIT:
                 break
             case _:

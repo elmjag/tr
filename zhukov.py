@@ -14,6 +14,7 @@ class CodeObject:
 class Frame:
     lineno: int  # f_lineno
     lasti: int  # f_lasti
+    globals: dict  # f_globals
     locals: dict  # f_locals
     code: CodeObject  # f_code
 
@@ -24,13 +25,10 @@ class Frame:
 
 
 def encode_frame(frame) -> bytes:
-    def _get_locals():
+    def _get_vars(vars):
         locals = {}
 
-        for name, val in frame.f_locals.items():
-            if name.startswith("__"):
-                continue
-
+        for name, val in vars.items():
             locals[name] = repr(val)
 
         return locals
@@ -43,7 +41,11 @@ def encode_frame(frame) -> bytes:
     )
 
     f = Frame(
-        lineno=frame.f_lineno, lasti=frame.f_lasti, locals=_get_locals(), code=code
+        lineno=frame.f_lineno,
+        lasti=frame.f_lasti,
+        globals=_get_vars(frame.f_globals),
+        locals=_get_vars(frame.f_locals),
+        code=code,
     )
 
     return dumps(f)
