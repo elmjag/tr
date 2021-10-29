@@ -50,55 +50,55 @@ class Command:
         raise NotImplementedError()
 
 
-class Help(Command):
+class HelpCmd(Command):
     name = "help"
     help_text = "print help"
 
 
-class Source(Command):
+class SourceCmd(Command):
     name = "source"
     help_text = "show source code"
 
 
-class Opcode(Command):
+class OpcodeCmd(Command):
     name = "opcode"
     help_text = "show bytecode"
 
 
-class Next(Command):
+class NextCmd(Command):
     name = "next"
     help_text = "next line"
 
 
-class Step(Command):
+class StepCmd(Command):
     name = "step"
     help_text = "next bytecode"
 
 
-class Vars(Command):
+class VarsCmd(Command):
     name = "vars"
     help_text = "show variables (locals, globals)"
 
 
-class Stack(Command):
-    name = "stack"
-    help_text = "show stack"
+class FrameCmd(Command):
+    name = "frame"
+    help_text = "show current frame"
 
 
-class Quit(Command):
+class QuitCmd(Command):
     name = "quit"
     help_text = "exit debugger"
 
 
 class Commands(Enum):
-    HELP = Help()
-    SOURCE = Source()
-    OPCODE = Opcode()
-    NEXT = Next()
-    STEP = Step()
-    VARS = Vars()
-    STACK = Stack()
-    QUIT = Quit()
+    HELP = HelpCmd()
+    SOURCE = SourceCmd()
+    OPCODE = OpcodeCmd()
+    NEXT = NextCmd()
+    STEP = StepCmd()
+    VARS = VarsCmd()
+    FRAME = FrameCmd()
+    QUIT = QuitCmd()
 
 
 def err_exit(error_msg):
@@ -172,8 +172,25 @@ class SourceFile:
 
 
 class Opcodes:
+    STORE_NAME = dis.opmap["STORE_NAME"]  #  90
+    LOAD_CONST = dis.opmap["LOAD_CONST"]  # 100
+    LOAD_NAME = dis.opmap["LOAD_NAME"]  # 101
+    LOAD_FAST = dis.opmap["LOAD_FAST"]  # 124
+    LOAD_METHOD = dis.opmap["LOAD_METHOD"] # 160
+
     def __init__(self, frame: Frame):
         self.frame = frame
+
+    def _get_arg_note(self, opcode, arg) -> Optional[str]:
+        match opcode:
+            case self.LOAD_CONST:
+                return self.frame.code.consts[arg]
+            case self.LOAD_FAST:
+                return self.frame.code.varnames[arg]
+            case self.STORE_NAME | self.LOAD_NAME | self.LOAD_METHOD:
+                return self.frame.code.names[arg]
+            case _:
+                return None
 
     def get_opcodes(self):
         code = self.frame.code
@@ -190,14 +207,15 @@ class Opcodes:
 
             opcode = code.code[i]
             arg = code.code[i + 1]
+            arg_note = self._get_arg_note(opcode, arg)
             op_name = dis.opname[opcode]
 
-            yield lineno, i, op_name, arg
+            yield lineno, i, op_name, arg, arg_note
 
     def get_current_opcode(self):
-        for lineno, i, op_name, arg in self.get_opcodes():
+        for lineno, i, op_name, arg, arg_note in self.get_opcodes():
             if i == self.frame.lasti:
-                return lineno, i, op_name, arg
+                return lineno, i, op_name, arg, arg_note
 
 
 #
@@ -226,8 +244,9 @@ def goto_next_opcode(reply_socket: ReplaySocket):
     reply_socket.step_opcode()
     frame = reply_socket.get_frame()
 
-    lineno, i, op_name, arg = Opcodes(frame).get_current_opcode()
-    print(f"{lineno:{5}} {i:{12}} {op_name:{20}} {arg:{3}}")
+    lineno, i, op_name, arg, arg_note = Opcodes(frame).get_current_opcode()
+    arg_note = "" if arg_note is None else f" ({arg_note})"
+    print(f"{lineno:{5}} {i:{12}} {op_name:{20}} {arg:{3}}{arg_note}")
 
     return frame
 
@@ -269,7 +288,7 @@ def show_opcodes(frame: Frame):
     all_opcodes = []
     lasti_line = None
     prev_line = None
-    for lineno, i, op_name, arg in opcodes.get_opcodes():
+    for lineno, i, op_name, arg, arg_note in opcodes.get_opcodes():
         first_col = ""
 
         if lineno != prev_line:
@@ -287,7 +306,9 @@ def show_opcodes(frame: Frame):
             first_col = "-->"
             lasti_line = len(all_opcodes)
 
-        line = f"{first_col:{5}} {i:{12}} {op_name:{20}} {arg:{3}}"
+        arg_note = "" if arg_note is None else f" ({arg_note})"
+        line = f"{first_col:{5}} {i:{12}} {op_name:{20}} {arg:{3}}{arg_note}"
+
         all_opcodes.append(line)
 
     start = max(0, lasti_line - (MAX_SOURCE_ROWS // 2))
@@ -295,6 +316,23 @@ def show_opcodes(frame: Frame):
 
     for line in all_opcodes[start:end]:
         print(line)
+
+
+def show_frame(frame):
+    def _print_numbered(name, items):
+        print(f"  {name}:")
+        for i, name in enumerate(items):
+            print(f"    {i:2}: {name}")
+
+    print(
+        f"f_lineno: {frame.lineno}\n"
+        f"f_lasti: {frame.lasti}\n"
+        f"f_code:\n"
+        f"  co_filename: {frame.code.filename}"
+    )
+    _print_numbered("co_varnames", frame.code.varnames)
+    _print_numbered("co_consts", frame.code.consts)
+    _print_numbered("co_names", frame.code.names)
 
 
 def run_commands(reply_socket: ReplaySocket):
@@ -325,6 +363,8 @@ def run_commands(reply_socket: ReplaySocket):
                 frame = goto_next_opcode(reply_socket)
             case Commands.VARS:
                 show_variables(frame)
+            case Commands.FRAME:
+                show_frame(frame)
             case Commands.QUIT:
                 break
             case _:

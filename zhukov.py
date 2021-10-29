@@ -6,6 +6,9 @@ from pickle import dumps, loads
 @dataclass
 class CodeObject:
     filename: str  # co_filename
+    varnames: tuple  # co_varnames
+    names: tuple  # co_names
+    consts: list  # co_consts
     code: bytes  # co_code
     lines: List[Tuple[int, int, int]]  # co_lines() result
 
@@ -34,8 +37,12 @@ def encode_frame(frame) -> bytes:
         return locals
 
     f_code = frame.f_code
+
     code = CodeObject(
         filename=f_code.co_filename,
+        varnames=f_code.co_varnames,
+        names=f_code.co_names,
+        consts=[repr(n) for n in f_code.co_consts],
         code=f_code.co_code,
         lines=list(f_code.co_lines()),
     )
